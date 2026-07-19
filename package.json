@@ -1,0 +1,53 @@
+{
+  "name": "zustand-reset-manager",
+  "version": "0.1.0",
+  "description": "Central, type-safe reset for many Zustand stores at once (single store, group, or all) - re-runs your initializer so dynamic values are regenerated.",
+  "keywords": [
+    "zustand",
+    "reset",
+    "store",
+    "state-management",
+    "logout",
+    "react",
+    "vanilla"
+  ],
+  "license": "MIT",
+  "author": "",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js",
+      "require": "./dist/testing.cjs"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "zustand": ">=4"
+  },
+  "devDependencies": {
+    "react": "18.3.1",
+    "tsup": "8.3.5",
+    "typescript": "5.7.2",
+    "vitest": "2.1.8",
+    "zustand": "5.0.2"
+  }
+}
