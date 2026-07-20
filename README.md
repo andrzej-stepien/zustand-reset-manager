@@ -9,10 +9,15 @@ v4 and v5.
 - **Factory reset.** Your initializer is re-run on reset, so dynamic values
   such as `crypto.randomUUID()` are regenerated - not frozen at first render.
 - **Full Zustand signature.** The initializer keeps its exact
-  `(set, get, api) => state` shape, so existing stores migrate by wrapping,
-  without rewriting.
-- **HMR-safe.** Re-registering the same name (Vite/webpack hot reload) never
-  throws.
+  `(set, get, api) => state` shape - including middleware. Creators wrapped in
+  `persist`, `devtools`, or `immer` type through without casts.
+- **`persist`-aware.** Reset can clear the persisted storage, and it waits for
+  an in-flight rehydration to finish first so it never gets clobbered.
+- **`preserve` selected fields.** Keep a few keys (theme, language) while
+  resetting everything else.
+- **HMR-safe and bundle-safe.** Re-registering the same name (Vite/webpack hot
+  reload) never throws, and the registry lives on `globalThis` so duplicate
+  copies of the package still share one registry.
 
 ## The problem
 
@@ -93,6 +98,68 @@ const sessionStore = createResettableVanillaStore("session", (set) => ({
 }));
 ```
 
+Prefer the `zustand-reset-manager/vanilla` subpath in non-React code. It imports
+only `zustand/vanilla`, so it never pulls in the React entry of Zustand (nor,
+transitively, React):
+
+```ts
+import {
+  createResettableVanillaStore,
+  resetAllStores,
+} from "zustand-reset-manager/vanilla";
+```
+
+Both entries share the exact same global registry, so `resetAllStores()` from
+either one resets every store.
+
+### `persist`: reset on logout, clear storage
+
+Stores created with the `persist` middleware are detected automatically (no
+extra imports, no config). Pass an options object to opt into the async,
+persist-aware behavior - these calls return a `Promise` you can await:
+
+```ts
+import { persist, createJSONStorage } from "zustand/middleware";
+import { createResettableStore, resetAllStores } from "zustand-reset-manager";
+
+// Curried form keeps middleware inference with an explicit state type.
+const useCartStore = createResettableStore<CartState>("cart")(
+  persist(
+    (set) => ({
+      items: [] as string[],
+      add: (item: string) => set((s) => ({ items: [...s.items, item] })),
+    }),
+    { name: "cart", storage: createJSONStorage(() => localStorage) },
+  ),
+);
+
+// On logout: reset in-memory state AND wipe the persisted copies from storage.
+async function logout() {
+  await resetAllStores({ clearPersistedState: true });
+}
+```
+
+- Without `clearPersistedState`, the in-memory state is still reset; the reset's
+  own write overwrites the persisted value with the fresh initial state.
+- With `clearPersistedState: true`, `store.persist.clearStorage()` is also called
+  so the storage entry is removed entirely.
+- If a store is still doing its initial (async) rehydration when you reset, the
+  reset waits for `onFinishHydration` first - otherwise the rehydration would
+  land after the reset and overwrite it.
+
+### `preserve`: keep some fields across a reset
+
+```ts
+// Keep the user's theme and language; reset everything else to defaults.
+await resetStore<PreferencesState>("preferences", {
+  preserve: ["theme", "language"],
+});
+```
+
+`preserve` is typed as `(keyof T)[]` when you supply the state type explicitly
+(`resetStore<T>(name, { preserve: [...] })`); otherwise it accepts any string
+key, since reset functions address a store by its name and cannot infer `T`.
+
 ### Resetting between tests
 
 ```ts
@@ -108,26 +175,41 @@ afterEach(() => {
 ### `createResettableStore(nameOrConfig, initializer)`
 
 React store. `nameOrConfig` is either a `string` (the name) or
-`{ name: string; group?: string }`. Returns the usual Zustand bound hook
-(`UseBoundStore<StoreApi<T>>`). Also callable curried:
-`createResettableStore<T>(name)(initializer)`.
+`{ name: string; group?: string }`. Returns the usual Zustand bound hook. The
+signature mirrors Zustand's `create`, including middleware mutators, so
+`persist`/`devtools`/`immer`-wrapped creators type through without casts. Also
+callable curried: `createResettableStore<T>(name)(initializer)` - use the
+curried form with an explicit state type to keep middleware inference (exactly
+like Zustand's `create<T>()(...)`).
 
 ### `createResettableVanillaStore(nameOrConfig, initializer)`
 
 Same as above but wraps `createStore` from `zustand/vanilla` and returns a
-plain `StoreApi<T>`. Use outside React.
+plain store api. Use outside React. Also available from the
+`zustand-reset-manager/vanilla` subpath, which does not pull in React.
 
-### `resetStore(name)`
+### `resetStore(name)` / `resetStore(name, options)`
 
-Reset a single store to a freshly-initialized state.
+Reset a single store to a freshly-initialized state. Called with no options it
+is synchronous and returns `void`. Called with an `options` object it returns a
+`Promise<void>`.
 
-### `resetStores(group)`
+`options`:
 
-Reset every store registered with the given `group`.
+- `clearPersistedState?: boolean` - also clear the store's persisted storage
+  (persist middleware only).
+- `preserve?: (keyof T)[]` - keys whose current value survives the reset.
 
-### `resetAllStores()`
+### `resetStores(group)` / `resetStores(group, options)`
 
-Reset every registered store.
+Reset every store registered with the given `group`. Same `options` and
+sync/`Promise` behavior as `resetStore`.
+
+### `resetAllStores()` / `resetAllStores(options)`
+
+Reset every registered store. Same `options` and sync/`Promise` behavior as
+`resetStore`. The classic "reset everything on logout" - with
+`{ clearPersistedState: true }` it also wipes persisted state.
 
 ### `unregisterStore(name): boolean`
 
@@ -179,30 +261,41 @@ recreated.
 
 ## Caveats
 
-- **Actions get new references after a reset.** Because the initializer is
-  re-run, the action functions it returns are **new function instances** after
-  each reset. They keep working (they close over the stable `set`/`get`), but a
-  component that subscribes to an action *by reference*
+- **Actions get new references after a reset (plain stores).** Because the
+  initializer is re-run, the action functions it returns are **new function
+  instances** after each reset. They keep working (they close over the stable
+  `set`/`get`), but a component that subscribes to an action *by reference*
   (`useStore((s) => s.doThing)`) will re-render on reset. Subscribe to data, not
   to action identity, if that matters to you.
-- **Multiple copies of this package = multiple registries.** If two different
-  bundles (micro-frontends, or a duplicated install in `node_modules`) each load
-  their own copy of `zustand-reset-manager`, there are two independent
-  registries and `resetAllStores()` will only reset the stores registered in its
-  own copy. Deduplicate the dependency (single version, hoisted) to avoid this.
+- **Persisted stores reset to their captured initial state.** For `persist`
+  stores, reset does **not** re-run the (middleware-wrapped) initializer -
+  doing so would re-trigger hydration and double-wrap `setState`. Instead it
+  restores the initial state the store captured at creation (via
+  `getInitialState`). Consequences: dynamic values (`crypto.randomUUID()`) are
+  **not** regenerated on reset for persisted stores, and the same
+  caveat about shared mutable containers as the cache approach applies. Plain
+  (non-persist) stores keep the full re-run behavior. Resetting a persisted
+  store requires zustand >=4.5 - older versions expose no `getInitialState`,
+  so reset falls back to re-running the initializer, which may restore stale
+  state from storage.
+- **Persist resets should be awaited.** Pass an options object (even an empty
+  `{}`) and `await` the call when a store uses `persist`, so an in-flight
+  rehydration is waited on and `clearPersistedState` completes before you
+  continue.
 - **`replace: true` requires the full state.** Reset uses
-  `setState(fullState, true)`; this is fine here because the initializer always
-  produces the complete state. (Relevant if you compare against Zustand v5's
-  stricter `replace` typing.)
+  `setState(fullState, true)`; this is fine here because the initializer (or
+  captured initial state) always produces the complete state. (Relevant if you
+  compare against Zustand v5's stricter `replace` typing.)
+- **Duplicate package copies share one registry.** The registry lives on
+  `globalThis` under `Symbol.for("zustand-reset-manager/registry")`, so two
+  copies of this package (micro-frontends, or a duplicated install) share a
+  single registry and `resetAllStores()` reaches every store. Deduplicating the
+  dependency is still recommended, but no longer required for correctness.
 - **Dynamically created stores must be unregistered.** The registry holds a hard
   reference; call `unregisterStore(name)` when a per-view store goes away.
 
 ## Roadmap
 
-- **0.2** - `persist` support: `clearPersistedState`, waiting for rehydration,
-  `localStorage`/`sessionStorage`/custom storage, preserving selected fields
-  (`preserve: ["theme"]`), a `globalThis`-based registry to survive duplicate
-  copies.
 - **0.3** - inter-store dependencies and reset ordering, `beforeReset` /
   `afterReset` hooks, logout/MSAL/tenant-change integration, devtools showing
   the reset reason.

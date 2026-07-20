@@ -1,5 +1,6 @@
 import { describe, expectTypeOf, it } from "vitest";
 import type { StoreApi, UseBoundStore } from "zustand";
+import { devtools, persist } from "zustand/middleware";
 import {
   createResettableStore,
   createResettableVanillaStore,
@@ -49,6 +50,65 @@ describe("type inference", () => {
     const useStore = make((set) => ({ user: null, setUser: (user) => set({ user }) }));
     expectTypeOf(useStore).toEqualTypeOf<UseBoundStore<StoreApi<UserState>>>();
     expectTypeOf(useStore.getState()).toEqualTypeOf<UserState>();
+  });
+});
+
+interface CartState {
+  items: string[];
+  add: (item: string) => void;
+}
+
+describe("middleware mutator typing (no casts needed)", () => {
+  it("types a persist-wrapped React store and exposes .persist (curried form)", () => {
+    // Curried form keeps mutator inference with an explicit state type, exactly
+    // like Zustand's own `create<T>()(...)`.
+    const useCart = createResettableStore<CartState>("cart-types-persist")(
+      persist(
+        (set) => ({
+          items: [],
+          add: (item) => set((s) => ({ items: [...s.items, item] })),
+        }),
+        { name: "cart-types-persist" },
+      ),
+    );
+
+    expectTypeOf(useCart.getState()).toEqualTypeOf<CartState>();
+    expectTypeOf(useCart.getState().items).toEqualTypeOf<string[]>();
+    // The persist mutator surfaces `.persist` on the store without any cast.
+    expectTypeOf(useCart.persist.hasHydrated()).toEqualTypeOf<boolean>();
+    expectTypeOf(useCart.persist.clearStorage).toBeFunction();
+  });
+
+  it("types a devtools-wrapped React store without casts", () => {
+    interface CounterState {
+      count: number;
+      inc: () => void;
+    }
+    const useCounter = createResettableStore<CounterState>("counter-types")(
+      devtools(
+        (set) => ({ count: 0, inc: () => set((s) => ({ count: s.count + 1 })) }),
+        { name: "counter-types" },
+      ),
+    );
+
+    expectTypeOf(useCounter.getState()).toEqualTypeOf<CounterState>();
+    expectTypeOf(useCounter.getState().count).toEqualTypeOf<number>();
+    // devtools augments setState with an optional action argument.
+    useCounter.setState({ count: 1 }, false, "inc");
+  });
+
+  it("types persist on the vanilla variant", () => {
+    interface SessionState {
+      token: string | null;
+    }
+    const store = createResettableVanillaStore<SessionState>("session-types")(
+      persist(() => ({ token: null as string | null }), {
+        name: "session-types",
+      }),
+    );
+
+    expectTypeOf(store.getState()).toEqualTypeOf<SessionState>();
+    expectTypeOf(store.persist.clearStorage).toBeFunction();
   });
 });
 

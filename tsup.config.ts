@@ -1,15 +1,16 @@
 import { defineConfig } from "tsup";
 
 export default defineConfig({
-  entry: ["src/index.ts", "src/testing.ts"],
+  entry: ["src/index.ts", "src/testing.ts", "src/vanilla.ts"],
   format: ["esm", "cjs"],
   dts: true,
   clean: true,
   sourcemap: true,
   treeshake: true,
   minify: false,
-  // Extract the shared registry into a common chunk so `.` and `./testing`
-  // share ONE registry instance (critical for resetAllStores in tests).
+  // Split shared code into common chunks so the `.`, `./testing`, and
+  // `./vanilla` entries share the same modules. The registry itself lives on
+  // `globalThis` (see registry.ts), so it is one instance even across bundles.
   splitting: true,
   outExtension({ format }) {
     return { js: format === "cjs" ? ".cjs" : ".js" };

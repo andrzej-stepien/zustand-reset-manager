@@ -1,6 +1,6 @@
 {
   "name": "zustand-reset-manager",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Central, type-safe reset for many Zustand stores at once (single store, group, or all) - re-runs your initializer so dynamic values are regenerated.",
   "keywords": [
     "zustand",
@@ -29,6 +29,11 @@
       "import": "./dist/testing.js",
       "require": "./dist/testing.cjs"
     },
+    "./vanilla": {
+      "types": "./dist/vanilla.d.ts",
+      "import": "./dist/vanilla.js",
+      "require": "./dist/vanilla.cjs"
+    },
     "./package.json": "./package.json"
   },
   "files": [
@@ -45,9 +50,14 @@
   },
   "devDependencies": {
     "react": "18.3.1",
-    "tsup": "8.3.5",
+    "tsup": "8.5.1",
     "typescript": "5.7.2",
-    "vitest": "2.1.8",
+    "vitest": "4.1.10",
     "zustand": "5.0.2"
+  },
+  "overrides": {
+    "tsup": {
+      "esbuild": "0.28.1"
+    }
   }
 }
