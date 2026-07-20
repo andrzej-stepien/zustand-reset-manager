@@ -13,6 +13,12 @@
   ],
   "license": "MIT",
   "author": "",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/andrzej-stepien/zustand-reset-manager.git"
+  },
+  "homepage": "https://github.com/andrzej-stepien/zustand-reset-manager#readme",
+  "bugs": "https://github.com/andrzej-stepien/zustand-reset-manager/issues",
   "type": "module",
   "sideEffects": false,
   "main": "./dist/index.cjs",
