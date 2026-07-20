@@ -1,6 +1,6 @@
 {
   "name": "zustand-reset-manager",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Central, type-safe reset for many Zustand stores at once (single store, group, or all) - re-runs your initializer so dynamic values are regenerated.",
   "keywords": [
     "zustand",

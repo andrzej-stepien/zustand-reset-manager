@@ -1,7 +1,11 @@
+import { fireAfterReset, fireBeforeReset } from "./hooks";
+import { orderEntriesByDependencies } from "./order";
 import { getAllEntries, getEntry, getGroupEntries, isDev } from "./registry";
 import type {
   Initializer,
   InternalResetOptions,
+  RegistryEntry,
+  ResetListenerContext,
   ResetOptions,
   StoreApi,
 } from "./types";
@@ -181,6 +185,61 @@ export function createResetFn<T>(
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Orchestration: hooks + dependency-ordered execution                       */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Reset a single entry, firing the global `beforeReset`/`afterReset` hooks
+ * around it. `afterReset` fires once the reset has settled (for async resets,
+ * after the returned promise resolves or rejects). Returns whatever the reset
+ * closure returns (`void` for sync resets, a `Promise` for async ones).
+ */
+function resetEntry(
+  entry: RegistryEntry,
+  options?: InternalResetOptions,
+): void | Promise<void> {
+  const context: ResetListenerContext = {
+    name: entry.name,
+    group: entry.group,
+    reason: options?.reason,
+  };
+  fireBeforeReset(context);
+  const result = entry.reset(options);
+  if (isThenable(result)) {
+    return result.then(
+      () => {
+        fireAfterReset(context);
+      },
+      (error) => {
+        fireAfterReset(context);
+        throw error;
+      },
+    );
+  }
+  fireAfterReset(context);
+  return result;
+}
+
+/**
+ * Reset dependency-ordered levels: each level sequentially, the stores within a
+ * level in parallel. Used by the bulk reset APIs when options are supplied.
+ */
+function resetLevels(
+  levels: RegistryEntry[][],
+  options: InternalResetOptions,
+): Promise<void> {
+  let chain: Promise<void> = Promise.resolve();
+  for (const level of levels) {
+    chain = chain.then(() =>
+      Promise.all(
+        level.map((entry) => Promise.resolve(resetEntry(entry, options))),
+      ).then(() => undefined),
+    );
+  }
+  return chain;
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Public reset API                                                          */
 /* -------------------------------------------------------------------------- */
 
@@ -208,7 +267,8 @@ export function resetStore<T = Record<string, unknown>>(
     );
     return options ? Promise.resolve() : undefined;
   }
-  const result = entry.reset(options as InternalResetOptions | undefined);
+  // A single store has nothing to order; `dependsOn` only affects bulk resets.
+  const result = resetEntry(entry, options as InternalResetOptions | undefined);
   if (options) {
     return Promise.resolve(result).then(() => undefined);
   }
@@ -233,15 +293,14 @@ export function resetStores<T = Record<string, unknown>>(
     );
     return options ? Promise.resolve() : undefined;
   }
+  const levels = orderEntriesByDependencies(entries);
   if (options) {
-    return Promise.all(
-      entries.map((entry) =>
-        Promise.resolve(entry.reset(options as InternalResetOptions)),
-      ),
-    ).then(() => undefined);
+    return resetLevels(levels, options as InternalResetOptions);
   }
-  for (const entry of entries) {
-    entry.reset();
+  for (const level of levels) {
+    for (const entry of level) {
+      resetEntry(entry);
+    }
   }
   return undefined;
 }
@@ -255,15 +314,14 @@ export function resetAllStores<T = Record<string, unknown>>(
   options?: ResetOptions<T>,
 ): void | Promise<void> {
   const entries = getAllEntries();
+  const levels = orderEntriesByDependencies(entries);
   if (options) {
-    return Promise.all(
-      entries.map((entry) =>
-        Promise.resolve(entry.reset(options as InternalResetOptions)),
-      ),
-    ).then(() => undefined);
+    return resetLevels(levels, options as InternalResetOptions);
   }
-  for (const entry of entries) {
-    entry.reset();
+  for (const level of levels) {
+    for (const entry of level) {
+      resetEntry(entry);
+    }
   }
   return undefined;
 }
