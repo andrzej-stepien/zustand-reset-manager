@@ -397,6 +397,10 @@ recreated.
 - **Next** - devtools surfacing the reset reason, ready-made logout / tenant-
   change integrations.
 
+## Writing
+
+- [How to reset 20 Zustand stores correctly on logout](https://dev.to/phetphet/how-to-reset-20-zustand-stores-correctly-on-logout-1je8) - the story behind this library
+
 ## License
 
 MIT
