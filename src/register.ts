@@ -24,6 +24,7 @@ export function register<T>(
   registerEntry({
     name: config.name,
     group: config.group,
+    dependsOn: config.dependsOn,
     reset: createResetFn(api, initializer),
   });
 }

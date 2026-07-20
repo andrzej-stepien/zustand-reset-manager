@@ -184,12 +184,80 @@ afterEach(() => {
 });
 ```
 
+## Orchestration
+
+Coordinate resets across many stores: react to them with global hooks, tag them
+with a `reason`, and control the order they run in with declared dependencies.
+
+### Hooks + `reason`: one place to react to a logout
+
+`addResetListener({ beforeReset?, afterReset? })` registers a global listener and
+returns an `unsubscribe` function. Every reset triggered through `resetStore`,
+`resetStores`, or `resetAllStores` calls `beforeReset` right before a store is
+reset and `afterReset` right after (for async resets, once the reset has
+settled). Both callbacks receive `{ name, group, reason }`.
+
+`reason` is a free-form string you pass in the reset options (`"logout"`,
+`"tenant-switch"`, `"test"`, ...). It does not change the reset - it only rides
+along to the hooks so they can branch on the cause.
+
+```ts
+import { addResetListener, resetAllStores } from "zustand-reset-manager";
+
+const unsubscribe = addResetListener({
+  beforeReset: ({ name, reason }) => {
+    if (reason === "logout") console.debug(`clearing ${name} on logout`);
+  },
+  afterReset: ({ name }) => analytics.track("store_reset", { name }),
+});
+
+async function logout() {
+  await resetAllStores({ reason: "logout", clearPersistedState: true });
+}
+
+// on teardown
+unsubscribe();
+```
+
+An exception thrown from a listener is caught and logged
+(`console.error`, prefixed `[zustand-reset-manager]`); it never interrupts the
+reset or the other listeners.
+
+### `dependsOn`: reset order
+
+Declare that a store must be reset AFTER the stores it depends on. During a bulk
+reset (`resetStores` / `resetAllStores`) the batch is topologically sorted so
+every dependency runs first.
+
+```ts
+// auth resets before profile; profile resets before dashboard.
+createResettableStore({ name: "auth" }, authInit);
+createResettableStore({ name: "profile", dependsOn: ["auth"] }, profileInit);
+createResettableStore({ name: "dashboard", dependsOn: ["profile"] }, dashboardInit);
+
+resetAllStores(); // order: auth -> profile -> dashboard
+```
+
+Semantics:
+
+- A dependency on a store that is not part of the current batch (a different
+  group, or not registered at all) is a soft edge - it is ignored for ordering.
+- A dependency cycle cannot be ordered: it logs a dev-only warning and falls
+  back to registration order.
+- `dependsOn` only affects bulk resets; a single `resetStore(name)` never
+  consults it.
+- Async resets (called with an options object) run **one topological level at a
+  time, in sequence**, and the stores **within a level run in parallel**
+  (`Promise.all`). Independent stores are reset concurrently; a dependent store
+  waits for the whole level of its dependencies to settle first.
+
 ## API reference
 
 ### `createResettableStore(nameOrConfig, initializer)`
 
 React store. `nameOrConfig` is either a `string` (the name) or
-`{ name: string; group?: string }`. Returns the usual Zustand bound hook. The
+`{ name: string; group?: string; dependsOn?: string[] }`. Returns the usual
+Zustand bound hook. The
 signature mirrors Zustand's `create`, including middleware mutators, so
 `persist`/`devtools`/`immer`-wrapped creators type through without casts. Also
 callable curried: `createResettableStore<T>(name)(initializer)` - use the
@@ -213,6 +281,8 @@ is synchronous and returns `void`. Called with an `options` object it returns a
 - `clearPersistedState?: boolean` - also clear the store's persisted storage
   (persist middleware only).
 - `preserve?: (keyof T)[]` - keys whose current value survives the reset.
+- `reason?: string` - free-form label forwarded to reset listeners; does not
+  affect the reset itself.
 
 ### `resetStores(group)` / `resetStores(group, options)`
 
@@ -224,6 +294,15 @@ sync/`Promise` behavior as `resetStore`.
 Reset every registered store. Same `options` and sync/`Promise` behavior as
 `resetStore`. The classic "reset everything on logout" - with
 `{ clearPersistedState: true }` it also wipes persisted state.
+
+### `addResetListener(listener): () => void`
+
+Register a global reset listener `{ beforeReset?, afterReset? }`; returns an
+idempotent `unsubscribe` function. Each callback receives
+`{ name, group, reason }`. `beforeReset` fires before a store is reset,
+`afterReset` after it settles. Listener exceptions are caught and logged and
+never interrupt the reset or other listeners. See
+[Orchestration](#orchestration).
 
 ### `unregisterStore(name): boolean`
 
@@ -310,9 +389,11 @@ recreated.
 
 ## Roadmap
 
-- **0.3** - inter-store dependencies and reset ordering, `beforeReset` /
-  `afterReset` hooks, logout/MSAL/tenant-change integration, devtools showing
-  the reset reason.
+- **Done** - inter-store dependencies and reset ordering (`dependsOn`),
+  `beforeReset` / `afterReset` hooks, and a `reason` on every reset. See
+  [Orchestration](#orchestration).
+- **Next** - devtools surfacing the reset reason, ready-made logout / tenant-
+  change integrations.
 
 ## License
 
