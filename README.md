@@ -11,8 +11,9 @@ v4 and v5.
 - **Full Zustand signature.** The initializer keeps its exact
   `(set, get, api) => state` shape - including middleware. Creators wrapped in
   `persist`, `devtools`, or `immer` type through without casts.
-- **`persist`-aware.** Reset can clear the persisted storage, and it waits for
-  an in-flight rehydration to finish first so it never gets clobbered.
+- **`persist`-aware.** Reset can clear the persisted storage, and an in-flight
+  rehydration never clobbers it - if one lands after the reset, the reset is
+  re-applied on top (without ever blocking on a broken storage).
 - **`preserve` selected fields.** Keep a few keys (theme, language) while
   resetting everything else.
 - **HMR-safe and bundle-safe.** Re-registering the same name (Vite/webpack hot
@@ -144,8 +145,13 @@ async function logout() {
 - With `clearPersistedState: true`, `store.persist.clearStorage()` is also called
   so the storage entry is removed entirely.
 - If a store is still doing its initial (async) rehydration when you reset, the
-  reset waits for `onFinishHydration` first - otherwise the rehydration would
-  land after the reset and overwrite it.
+  reset applies immediately and self-heals: if the in-flight rehydration lands
+  afterwards (with state read from before the reset), a one-shot
+  `onFinishHydration` listener re-applies the reset over it in the same tick.
+  The reset deliberately does NOT wait for rehydration - when the storage read
+  fails, persist swallows the error without notifying finish-hydration
+  listeners, so waiting could hang forever (e.g. a logout awaiting
+  `resetAllStores` on a broken storage).
 
 ### `preserve`: keep some fields across a reset
 
@@ -159,6 +165,14 @@ await resetStore<PreferencesState>("preferences", {
 `preserve` is typed as `(keyof T)[]` when you supply the state type explicitly
 (`resetStore<T>(name, { preserve: [...] })`); otherwise it accepts any string
 key, since reset functions address a store by its name and cannot infer `T`.
+
+One interaction to be aware of: when a persisted store is reset while its
+initial rehydration is still in flight, the immediate reset preserves values
+from the current (pre-hydration) state - but if the rehydration then lands, the
+self-healing re-reset preserves values from the freshly **hydrated** state. In
+other words, for `preserve`d keys the persisted value wins over the
+pre-hydration default. That is usually what you want (a persisted user
+preference survives), just don't expect the pre-hydration value to stick.
 
 ### Resetting between tests
 
@@ -279,9 +293,9 @@ recreated.
   so reset falls back to re-running the initializer, which may restore stale
   state from storage.
 - **Persist resets should be awaited.** Pass an options object (even an empty
-  `{}`) and `await` the call when a store uses `persist`, so an in-flight
-  rehydration is waited on and `clearPersistedState` completes before you
-  continue.
+  `{}`) and `await` the call when a store uses `persist`, so
+  `clearPersistedState` completes before you continue. (The reset itself never
+  blocks on an in-flight rehydration - see above.)
 - **`replace: true` requires the full state.** Reset uses
   `setState(fullState, true)`; this is fine here because the initializer (or
   captured initial state) always produces the complete state. (Relevant if you

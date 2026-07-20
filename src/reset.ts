@@ -140,24 +140,39 @@ export function createResetFn<T>(
       return undefined;
     };
 
-    // If a persisted store is still doing its initial (async) rehydration, wait
-    // for it to finish first - otherwise the in-flight rehydration would land
-    // AFTER our reset and overwrite the fresh state we just set.
+    // A persisted store may still be running its initial (async) rehydration.
+    // We must not WAIT for it to finish: when the storage read fails, persist
+    // swallows the error without notifying finish-hydration listeners, so a
+    // wait would hang forever (e.g. a logout awaiting `resetAllStores` on a
+    // broken storage).
+    //
+    // Instead, reset immediately and self-heal: if the in-flight rehydration
+    // lands later, it applies state read from storage BEFORE our reset
+    // overwrote it, so a one-shot finish-hydration listener re-applies the
+    // reset over it (synchronously, in the same tick as the stale apply).
+    // Failed rehydration applies nothing, so the immediate reset already is
+    // the final state.
     if (persist && persist.hasHydrated() === false) {
-      return new Promise<void>((resolve, reject) => {
-        const unsubscribe = persist.onFinishHydration(() => {
-          unsubscribe();
-          try {
-            const result = performReset();
-            if (isThenable(result)) {
-              result.then(() => resolve(), reject);
-            } else {
-              resolve();
-            }
-          } catch (error) {
-            reject(error);
+      const unsubscribe = persist.onFinishHydration(() => {
+        unsubscribe();
+        try {
+          const result = performReset();
+          if (isThenable(result)) {
+            result.catch((error) => {
+              console.error(
+                "[zustand-reset-manager] Re-applying a reset after late " +
+                  "rehydration failed:",
+                error,
+              );
+            });
           }
-        });
+        } catch (error) {
+          console.error(
+            "[zustand-reset-manager] Re-applying a reset after late " +
+              "rehydration failed:",
+            error,
+          );
+        }
       });
     }
 

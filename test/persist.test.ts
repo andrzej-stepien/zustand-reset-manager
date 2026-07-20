@@ -138,7 +138,7 @@ describe("persist - synchronous storage", () => {
 });
 
 describe("persist - asynchronous rehydration", () => {
-  it("waits for in-flight rehydration to finish before resetting", async () => {
+  it("resolves without waiting for in-flight rehydration and ends fresh", async () => {
     const storage = createAsyncStorage();
     // Pre-seed the storage so an async rehydration is meaningful.
     storage.map.set(
@@ -159,21 +159,32 @@ describe("persist - asynchronous rehydration", () => {
     // Right after creation the async hydration is still pending.
     expect(useCart.persist.hasHydrated()).toBe(false);
 
-    // Reset while hydration is in flight. It must wait for hydration to finish
-    // (otherwise the rehydration would overwrite the reset), THEN reset.
+    // Reset while hydration is in flight: applies immediately (no waiting) and
+    // self-heals when the in-flight rehydration lands afterwards.
     await resetStore<CartState>("cart", { clearPersistedState: true });
+    expect(useCart.getState().items).toEqual([]);
 
+    // Let the in-flight hydration land and the self-heal listener re-apply.
+    await new Promise((r) => setTimeout(r, 0));
     expect(useCart.persist.hasHydrated()).toBe(true);
     expect(useCart.getState().items).toEqual([]);
     expect(storage.map.has("cart")).toBe(false);
   });
 
-  it("without waiting, rehydration would win - the wait is what makes reset stick", async () => {
-    const storage = createAsyncStorage();
-    storage.map.set(
-      "cart",
-      JSON.stringify({ state: { items: ["persisted"] }, version: 0 }),
-    );
+  it("re-applies the reset over a late-landing rehydration", async () => {
+    // getItem is a manually-resolved deferred so hydration lands strictly
+    // AFTER the reset has already resolved.
+    const map = new Map<string, string>();
+    let resolveGet!: (value: string | null) => void;
+    const storage: StateStorage = {
+      getItem: () => new Promise<string | null>((r) => (resolveGet = r)),
+      setItem: (name, value) => {
+        map.set(name, value);
+      },
+      removeItem: (name) => {
+        map.delete(name);
+      },
+    };
 
     const useCart = createResettableStore<CartState>("cart")(
       persist(
@@ -185,11 +196,81 @@ describe("persist - asynchronous rehydration", () => {
       ),
     );
 
-    // Await the reset (which internally waits for hydration).
     await resetStore("cart", {});
+    expect(useCart.getState().items).toEqual([]);
 
-    // Let any further microtasks settle - nothing should overwrite the reset.
-    await Promise.resolve();
+    // The pre-reset storage read lands late with stale state...
+    resolveGet(JSON.stringify({ state: { items: ["persisted"] }, version: 0 }));
+    await new Promise((r) => setTimeout(r, 0));
+
+    // ...and the one-shot finish-hydration listener re-applies the reset.
+    expect(useCart.persist.hasHydrated()).toBe(true);
+    expect(useCart.getState().items).toEqual([]);
+  });
+
+  it("preserve + late rehydration: the persisted value wins for preserved keys", async () => {
+    const map = new Map<string, string>();
+    let resolveGet!: (value: string | null) => void;
+    const storage: StateStorage = {
+      getItem: () => new Promise<string | null>((r) => (resolveGet = r)),
+      setItem: (name, value) => {
+        map.set(name, value);
+      },
+      removeItem: (name) => {
+        map.delete(name);
+      },
+    };
+
+    interface PrefsState {
+      theme: string;
+      items: string[];
+    }
+    const usePrefs = createResettableStore<PrefsState>("prefs")(
+      persist(() => ({ theme: "light", items: [] as string[] }), {
+        name: "prefs",
+        storage: createJSONStorage(() => storage),
+      }),
+    );
+
+    // Immediate reset preserves from the pre-hydration state.
+    await resetStore<PrefsState>("prefs", { preserve: ["theme"] });
+    expect(usePrefs.getState().theme).toBe("light");
+
+    // The late-landing hydration applies the persisted state; the self-healing
+    // re-reset preserves from THAT state - so the persisted theme wins, while
+    // everything else is reset fresh (documented in the README).
+    resolveGet(
+      JSON.stringify({ state: { theme: "dark", items: ["stale"] }, version: 0 }),
+    );
+    await new Promise((r) => setTimeout(r, 0));
+    expect(usePrefs.getState().theme).toBe("dark");
+    expect(usePrefs.getState().items).toEqual([]);
+  });
+
+  it("resolves even when rehydration fails (regression: used to hang forever)", async () => {
+    const storage: StateStorage = {
+      getItem: () => Promise.reject(new Error("storage broken")),
+      setItem: () => {},
+      removeItem: () => {},
+    };
+
+    const useCart = createResettableStore<CartState>("cart")(
+      persist(
+        (set) => ({
+          items: [],
+          add: (item) => set((s) => ({ items: [...s.items, item] })),
+        }),
+        { name: "cart", storage: createJSONStorage(() => storage) },
+      ),
+    );
+
+    expect(useCart.persist.hasHydrated()).toBe(false);
+
+    // Persist swallows the storage error without notifying finish-hydration
+    // listeners; the old wait-based reset never settled here.
+    await expect(
+      resetStore<CartState>("cart", { clearPersistedState: true }),
+    ).resolves.toBeUndefined();
     expect(useCart.getState().items).toEqual([]);
   });
 });
