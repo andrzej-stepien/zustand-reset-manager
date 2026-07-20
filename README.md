@@ -1,5 +1,7 @@
 # zustand-reset-manager
 
+[![npm](https://img.shields.io/npm/v/zustand-reset-manager)](https://www.npmjs.com/package/zustand-reset-manager)
+
 Central, type-safe reset for many [Zustand](https://github.com/pmndrs/zustand)
 stores at once - reset **one** store, a **group**, or **all** of them with a
 single call. Works with React (`create`) and vanilla (`createStore`), Zustand
